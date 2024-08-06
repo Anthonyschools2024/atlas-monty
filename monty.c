@@ -1,168 +1,145 @@
 #include "monty.h"
-
-unsigned int isFail;
-/**
- * main - monty main function
- *
- * @ac: # of args
- * @av: array of args
- * Return: 0 on success, 1 on failure
- */
-int main(int ac, char **av)
-{
-	FILE *file_fd;
-
-	isFail = 0;
-	if (ac != 2)
-	{
-		fprintf(stderr, "USAGE: monty file\n");
-		return (EXIT_FAILURE);
-	}
-
-	file_fd = fopen(av[1], "r");
-	if (file_fd == NULL)
-	{
-		fprintf(stderr, "Error: Can't open file %s\n", av[1]);
-		return (EXIT_FAILURE);
-	}
-
-	if (read_file(file_fd) == EXIT_FAILURE)
-	{
-		/* failure */
-		fclose(file_fd);
-		return (EXIT_FAILURE);
-	}
-	fclose(file_fd);
-	return (EXIT_SUCCESS);
-}
+char **tokens_t;
 
 /**
- * read_file - read a file
+ * main - starts the monty interpreter
+ * @argc: number of arguments
+ * @argv: string array of arguments
  *
- * @fd: FILE pointer
- * Return: 0 on success, 1 on failure
+ * Return: EXIT_SUCCESS on success, EXIT_FAILURE otherwise
  */
-int read_file(FILE *fd)
+int main(int argc, char *argv[])
 {
-	stack_t *head = NULL;
-	char *buff = NULL;
-	size_t buffsize = 0;
-	ssize_t nread;
-	unsigned int lnum = 0;
+	int i, parse_return, call_return;
+	unsigned int line_number = 1;
+	FILE *file;
+	char buf[256];
+	stack_t *temp = NULL;
+	stack_t **head = &temp;
 
-	while ((nread = getline(&buff, &buffsize, fd)) != -1)
+	tokens_t = NULL;
+	if (argc != 2) /* 0 or 1 for no arguments? */
+		exitAll(head, NULL, line_number, 0);
+	file = fopen(argv[1], "r");
+
+	if (file == NULL)
 	{
-		lnum++;
-		/* fwrite(buff, nread, buffsize, stdout); */
-		parse_line(buff, &head, lnum);
-		if (isFail == 1)
+		fprintf(stderr, "Error: Can't open file %s\n", argv[1]);
+		exitAll(head, file, line_number, 1);
+	}
+	while (fgets(buf, 256, file)) /* reads lines up to \n or 256 chars */
+	{
+		tokens_t = malloc(10 * sizeof(char *)); /* command, int, \n */
+		if (tokens_t == NULL)
+			exitAll(head, file, line_number, 2);
+		for (i = 0; i < 10; i++) /* prepopulate with NULL*/
+			tokens_t[i] = NULL;
+
+		parse_return = parse(buf);
+		if (parse_return != 0) /* if not empty line */
 		{
-			if (buff != NULL)
-				free(buff);
-			buff = NULL;
-			free_stack(head);
-			return (EXIT_FAILURE);
+			call_return = call_op_func(tokens_t[0], head, line_number);
+			if (call_return != 1) /* if didn't return successfully */
+				exitAll(head, file, line_number, call_return);
 		}
+		line_number++;
+		if (tokens_t != NULL)
+			free(tokens_t);
+		tokens_t = NULL;
 	}
-
-	if (buff != NULL)
-		free(buff);
-	free_stack(head);
-	return (EXIT_SUCCESS);
+	freeAll(head);
+	fclose(file);
+	return (0);
 }
 
 /**
- * parse_line - parse a line from getline
+ * parse - parses buffer for commands
+ * @buf: buffer up the least of \n or 256 chars
  *
- * @buff: output from getline
- * @head: head of stack
- * @lnum: line number
- * Return: 0 on success, 1 on failure
+ * Return: 1 if successful, 0 if empty, -1 if too many
  */
-int parse_line(char *buff, stack_t **head, unsigned int lnum)
+int parse(char *buf)
 {
 	char *token;
-	void (*f)(stack_t **stack, unsigned int line_number);
-	unsigned int i = 0;
+	int token_count = 0;
 
-	token = strtok(buff, " \t\n");
+	token = strtok(buf, " \r\t\n");
 	if (token == NULL)
+		return (0); /* no commands - add error message? */
+
+	while (token != NULL) /* store tokens_t in memory */
 	{
-		return (EXIT_SUCCESS);
+		/* printf("token: %s\n", token); debug */
+		tokens_t[token_count] = token;
+		token = strtok(NULL, " \r\t\n");
+		token_count++;
 	}
 
-	f = get_op(token);
-	if (f == NULL)
-	{
-		fprintf(stderr, "L%d: unknown instruction %s\n", lnum, token);
-		isFail = 1;
-		return (EXIT_FAILURE);
-	}
-	f(head, lnum);
-
-	if (strcmp(token, "push") == 0)
-	{
-		token = strtok(NULL, " \t\n");
-		do {
-			if (token && (isdigit(token[i]) || token[i] == '-'))
-				i++;
-			else
-			{
-				fprintf(stderr, "L%d: usage: push integer\n", lnum);
-				isFail = 1;
-				return (EXIT_FAILURE);
-			}
-		} while (token[i]);
-		(*head)->n = atoi(token);
-	}
-	return (EXIT_SUCCESS);
+	return (1); /* success */
 }
 
 /**
- * get_op - get opcode function
- *
- * @str: opcode command
- * Return: function pointer
+ * freeAll - frees all dynamically allocated memory
+ * @head: head of list
  */
-void (*get_op(char *str))(stack_t **stack, unsigned int line_number)
+void freeAll(stack_t **head)
 {
-	instruction_t ops[] = {
-		{"push", push},
-		{"pall", pall},
-		{"pint", pint},
-		{"pop", pop},
-		{"swap", swap},
-		{"add", add},
-		{"nop", nop},
-		{NULL, NULL}
-	};
-	unsigned int i = 0;
+	stack_t *temp = NULL;
 
-	while (ops[i].opcode && strcmp(str, ops[i].opcode) != 0)
-		i++;
-	if (ops[i].opcode == NULL)
-		return (NULL);
-	return (ops[i].f);
-}
-
-/**
- * free_stack - frees a stack
- *
- * @head: head of a stack
- * Return: void
- */
-void free_stack(stack_t *head)
-{
-	stack_t *temp = head;
-
-	if (temp == NULL)
-		return;
-
-	while (head)
+	if (tokens_t != NULL)
+		free(tokens_t);
+	while (head != NULL && *head != NULL)
 	{
-		temp = head;
-		head = head->next;
+		temp = *head;
+		*head = (*head)->next;
 		free(temp);
 	}
-	free(head);
+	/* free(head); */
+}
+
+/**
+ * exitAll - handles all exit and error calls
+ * @head: head of list
+ * @file: file pointer
+ * @line_number: line number of error
+ * @err_no: internal error number
+ */
+void exitAll(stack_t **head, FILE *file, unsigned int line_number, int err_no)
+{
+	if (file != NULL)
+		fclose(file);
+	switch (err_no)
+	{
+		case 0:
+				fprintf(stderr, "USAGE: monty file\n");
+				break;
+		case 1: /* fprintf in main.c to reduce arguments sent to exitAll */
+				break;
+		case 2:
+				fprintf(stderr, "Error: malloc failed\n");
+				break;
+		case 3:
+				fprintf(stderr, "L%u: unknown instruction %s\n", line_number,
+					tokens_t[0]);
+				break;
+		case 4:
+				fprintf(stderr, "L%u: usage: push integer\n", line_number);
+				break;
+		case 5:
+				fprintf(stderr, "L%u: can't pint, stack empty\n", line_number);
+				break;
+		case 6:
+				fprintf(stderr, "L%u: can't pop an empty stack\n", line_number);
+				break;
+		case 7:
+				fprintf(stderr, "L%u: can't swap, stack too short\n",
+					line_number);
+				break;
+		case 8:
+				fprintf(stderr, "L%u: can't add, stack too short\n",
+					line_number);
+				break;
+	}
+	freeAll(head);
+	exit(EXIT_FAILURE);
 }
